@@ -6,6 +6,7 @@
 import os
 
 os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MUJOCO_GL"] = "egl"  # for headless rendering
 
 import torch
 
@@ -18,7 +19,6 @@ import typing as tp
 from pathlib import Path
 from typing import Dict, List
 
-import exca as xk
 import gymnasium
 import numpy as np
 import pydantic
@@ -71,7 +71,7 @@ class TrainConfig(BaseConfig):
     seed: int = 0
     log_every_updates: int = 10_000
     num_train_steps: int = 3_000_000
-    checkpoint_every_steps: int = 100_000
+    checkpoint_every_steps: int = 250_000
 
     # WANDB
     use_wandb: bool = False
@@ -86,12 +86,9 @@ class TrainConfig(BaseConfig):
     # If you want to add more available evaluations, Update "Evaluations" type above
     evaluations: Dict[str, Evaluation] | List[Evaluation] = pydantic.Field(default_factory=lambda: [])
 
-    eval_every_steps: int = 100_000
+    eval_every_steps: int = 250_000
 
     tags: dict = pydantic.Field(default_factory=lambda: {})
-
-    # exca
-    infra: xk.TaskInfra = xk.TaskInfra(version="1")
 
     def model_post_init(self, context):
         if self.relabel_dataset:
@@ -99,13 +96,7 @@ class TrainConfig(BaseConfig):
                 raise ValueError("Relabeling is only supported for DMC and OGBench environments")
 
     def build(self):
-        """In case of cluster run, use exca and process instead of explivit build"""
         return Workspace(self)
-
-    @infra.apply
-    def process(self):
-        ws = self.build()
-        ws.train()
 
 
 def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_build_kwargs: dict[str, tp.Any]):
@@ -124,7 +115,6 @@ def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_buil
     return agent, cfg, checkpoint_time
 
 
-# TODO this can be unified with train_humenv
 def init_wandb(cfg: TrainConfig):
     exp_name = "dmc-offline"
     wandb_name = exp_name
@@ -136,15 +126,14 @@ class Workspace:
     def __init__(self, cfg: TrainConfig) -> None:
         self.cfg = cfg
 
-        # NOTE we are assuming num_envs returns unvectorized environments
-        sample_env, _ = cfg.env.build(num_envs=1)
+        sample_env, _ = cfg.env.build()
         self.obs_space = sample_env.observation_space
-        assert isinstance(self.obs_space, (gymnasium.spaces.Box, gymnasium.spaces.Dict)), (
-            "Only Box and Dict observation spaces are supported"
+        assert isinstance(self.obs_space, gymnasium.spaces.Box), (
+            "Only Box observation spaces are supported"
         )
 
         self.action_space = sample_env.action_space
-        assert len(self.action_space.shape) == 1, "Only 1D action space is supported (first dim should be vector env)"
+        assert len(self.action_space.shape) == 1, "Only 1D action space is supported"
         self.action_dim = self.action_space.shape[0]
 
         print(f"Workdir: {self.cfg.work_dir}")
@@ -184,13 +173,6 @@ class Workspace:
         relabel_fn = self.cfg.env.get_relabel_fn(self.cfg.env.task) if self.cfg.relabel_dataset else None
         replay_buffer = self.cfg.data.build(buffer_device, self.cfg.agent.train.batch_size, self.cfg.env.frame_stack, relabel_fn)
         print(replay_buffer["train"])
-
-        if hasattr(self.agent, "setup_normalizer_from_data"):
-            print("Preparing normalizer from data")
-            assert self.cfg.data.buffer_type == "dict", (
-                f"setup_normalizer_from_data not supported with buffer type {self.cfg.data.buffer_type}"
-            )
-            self.agent.setup_normalizer_from_data(replay_buffer["train"].storage)
 
         total_metrics = None
         fps_start_time = time.time()
