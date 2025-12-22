@@ -322,6 +322,134 @@ class VForwardMap(nn.Module):
 
 
 ##########################
+# Visual modules
+##########################
+
+
+class DrQEncoderArchiConfig(BaseConfig):
+    name: tp.Literal["drq"] = "drq"
+    feature_dim: int | None = None  # if not None, linearly project the output to feature_dim
+
+    def build(self, obs_space):
+        return DrQEncoder(obs_space, self)
+
+
+class DrQEncoder(nn.Module):
+    """RGB encoder from the DrQ-v2 paper"""
+
+    def __init__(self, obs_space, cfg: DrQEncoderArchiConfig) -> None:
+        super().__init__()
+        self.cfg = cfg
+
+        assert len(obs_space.shape) == 3, "obs_space must have a 3D shape (image)"
+
+        # courtesy of https://github.com/facebookresearch/drqv2/blob/main/drqv2.py
+        self.trunk = nn.Sequential(
+            nn.Conv2d(obs_space.shape[0], 32, 3, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        with torch.no_grad():
+            self.repr_dim = np.prod(self.trunk(torch.zeros(1, *obs_space.shape)).shape)
+
+        if self.cfg.feature_dim is not None:
+            self.proj = nn.Sequential(nn.Linear(self.repr_dim, self.cfg.feature_dim), nn.LayerNorm(self.cfg.feature_dim), nn.Tanh())
+            self.repr_dim = self.cfg.feature_dim
+        else:
+            self.proj = nn.Identity()
+            print(
+                "WARNING: using a DrQ encoder with feature_dim=None. This yields very large feature vectors that are fed as input to other networks"
+            )
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.proj(self.trunk(obs))
+
+    @property
+    def output_space(self):
+        return gymnasium.spaces.Box(low=-np.inf, high=np.inf, shape=(self.repr_dim,), dtype=np.float32)
+
+
+class AugmentatorArchiConfig(BaseConfig):
+    name: tp.Literal["random_shifts"] = "random_shifts"
+    pad: int = 4
+
+    def build(self, obs_space):
+        return Augmentator(obs_space, self)
+
+
+class Augmentator(nn.Module):
+    """Image augmentations from DrQ-v2"""
+
+    def __init__(self, obs_space, cfg: AugmentatorArchiConfig) -> None:
+        super().__init__()
+        self.cfg = cfg
+
+        assert len(obs_space.shape) == 3, "obs_space must have a 3D shape (image)"
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        n, _, h, w = obs.size()
+        assert h == w, "Augmentator only supports square images"
+        padding = tuple([self.cfg.pad] * 4)
+        obs = F.pad(obs, padding, "replicate")
+        eps = 1.0 / (h + 2 * self.cfg.pad)
+        arange = torch.linspace(-1.0 + eps, 1.0 - eps, h + 2 * self.cfg.pad, device=obs.device, dtype=obs.dtype)[:h]
+        arange = arange.unsqueeze(0).repeat(h, 1).unsqueeze(2)
+        base_grid = torch.cat([arange, arange.transpose(1, 0)], dim=2)
+        base_grid = base_grid.unsqueeze(0).repeat(n, 1, 1, 1)
+        shift = torch.randint(0, 2 * self.cfg.pad + 1, size=(n, 1, 1, 2), device=obs.device, dtype=obs.dtype)
+        shift *= 2.0 / (h + 2 * self.cfg.pad)
+        grid = base_grid + shift
+        return F.grid_sample(obs, grid, padding_mode="zeros", align_corners=False)
+
+
+##########################
+# FlowQ modules
+##########################
+
+
+class NoiseConditionedActorArchiConfig(BaseConfig):
+    name: tp.Literal["noise_conditioned_actor"] = "noise_conditioned_actor"
+    model: tp.Literal["simple"] = "simple"
+    hidden_dim: int = 1024
+    hidden_layers: int = 1
+    embedding_layers: int = 2
+
+    def build(self, obs_space, z_dim: int, action_dim: int) -> "NoiseConditionedActor":
+        return NoiseConditionedActor(obs_space, z_dim, action_dim, self)
+
+
+class NoiseConditionedActor(nn.Module):
+    def __init__(self, obs_space, z_dim, action_dim, cfg: NoiseConditionedActorArchiConfig) -> None:
+        super().__init__()
+
+        assert len(obs_space.shape) == 1, "obs_space must have a 1D shape"
+        obs_dim = obs_space.shape[0]
+        self.cfg: NoiseConditionedActorArchiConfig = cfg
+        self.embed_z = simple_embedding(obs_dim + z_dim + action_dim, cfg.hidden_dim, cfg.embedding_layers)
+        self.embed_s = simple_embedding(obs_dim + action_dim, cfg.hidden_dim, cfg.embedding_layers)
+
+        seq = []
+        for _ in range(cfg.hidden_layers):
+            seq += [linear(cfg.hidden_dim, cfg.hidden_dim), nn.ReLU()]
+        seq += [linear(cfg.hidden_dim, action_dim)]
+        self.policy = nn.Sequential(*seq)
+
+    def forward(self, obs: torch.Tensor, z: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        z_embedding = self.embed_z(torch.cat([obs, z, noise], dim=-1))  # bs x h_dim // 2
+        s_embedding = self.embed_s(torch.cat([obs, noise], dim=-1))  # bs x h_dim // 2
+        embedding = torch.cat([s_embedding, z_embedding], dim=-1)
+        actions = torch.tanh(self.policy(embedding))
+        return actions
+
+
+##########################
 # Helper modules
 ##########################
 

@@ -13,7 +13,16 @@ from torch.utils._pytree import tree_map
 from metamotivo.base import BaseConfig
 from metamotivo.buffers.parallel import ParallelBuffer
 from metamotivo.buffers.transition import DictBuffer
-from metamotivo.pytree_utils import tree_check_batch_size, tree_get_batch_size
+
+
+def tree_check_batch_size(x, batch_size, prefix=""):
+    """Manual recursive check the batch size (first dim) of pytree of tensors"""
+    if isinstance(x, dict):
+        for key, item in x.items():
+            tree_check_batch_size(item, batch_size, prefix=f"{prefix}.{key}")
+    elif isinstance(x, torch.Tensor):
+        if x.shape[0] != batch_size:
+            raise ValueError(f"Batch size mismatch at {prefix}: expected {batch_size}, got {x.shape[0]}")
 
 
 def load_transitions(
@@ -112,6 +121,7 @@ class BaseDataConfig(BaseConfig):
     buffer_type: tp.Literal["dict", "parallel"] = "dict"
     future: float = 0.99
     num_workers: int = 8  # for parallel buffer
+    horizon: int = 1  # for RLDP only
 
     def build(self, buffer_device, batch_size, frame_stack, relabel_fn=None) -> tp.Dict:
         raise NotImplementedError
@@ -132,7 +142,7 @@ class BaseDataConfig(BaseConfig):
                     files[:num_episodes],
                     self.obs_type,
                 )
-                replay_buffer = {"train": DictBuffer(capacity=tree_get_batch_size(data["observation"]), device=buffer_device)}
+                replay_buffer = {"train": DictBuffer(capacity=data["observation"].shape[0], device=buffer_device)}
                 replay_buffer["train"].extend(data)
                 del data
                 if relabel_fn is not None:
@@ -152,9 +162,9 @@ class BaseDataConfig(BaseConfig):
                         frame_stack=frame_stack,
                         obs_type=self.obs_type,
                         relabel_fn=relabel_fn,
-                        device=buffer_device,
                         future=self.future,
                         num_workers=self.num_workers,
+                        horizon=self.horizon,
                     )
                 }
             case _:

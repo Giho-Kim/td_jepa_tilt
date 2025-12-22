@@ -16,20 +16,15 @@ from metamotivo.base_model import BaseModel, BaseModelConfig
 
 from ...base_model import load_model, save_model
 from ...nn_models import (
+    AugmentatorArchiConfig,
     BackwardArchiConfig,
+    DrQEncoderArchiConfig,
     ForwardArchiConfig,
     IdentityNNConfig,
-    ResidualActorArchiConfig,
     SimpleActorArchiConfig,
     eval_mode,
 )
-from ...normalizers import ObsNormalizerConfig
-from ...pixel_models import (
-    AugmentatorArchiConfig,
-    DreamerEncoderArchiConfig,
-    DrQEncoderArchiConfig,
-    ImpalaEncoderArchiConfig,
-)
+from ...normalizers import AVAILABLE_NORMALIZERS, IdentityNormalizerConfig
 
 
 class SFModelArchiConfig(BaseConfig):
@@ -38,12 +33,10 @@ class SFModelArchiConfig(BaseConfig):
     norm_z: bool = True
     successor_features: ForwardArchiConfig = ForwardArchiConfig()
     features: BackwardArchiConfig = BackwardArchiConfig()
-    actor: SimpleActorArchiConfig | ResidualActorArchiConfig = pydantic.Field(SimpleActorArchiConfig(), discriminator="name")
+    actor: SimpleActorArchiConfig = pydantic.Field(SimpleActorArchiConfig(), discriminator="name")
     left_encoder: BackwardArchiConfig | IdentityNNConfig = pydantic.Field(IdentityNNConfig(), discriminator="name")
     # a shared image encoder config that is used for all networks
-    rgb_encoder: IdentityNNConfig | DrQEncoderArchiConfig | DreamerEncoderArchiConfig | ImpalaEncoderArchiConfig = pydantic.Field(
-        IdentityNNConfig(), discriminator="name"
-    )
+    rgb_encoder: IdentityNNConfig | DrQEncoderArchiConfig = pydantic.Field(IdentityNNConfig(), discriminator="name")
     augmentator: IdentityNNConfig | AugmentatorArchiConfig = pydantic.Field(IdentityNNConfig(), discriminator="name")
 
 
@@ -51,7 +44,7 @@ class SFModelConfig(BaseModelConfig):
     name: tp.Literal["SFModel"] = "SFModel"
 
     archi: SFModelArchiConfig = SFModelArchiConfig()
-    obs_normalizer: ObsNormalizerConfig = ObsNormalizerConfig()
+    obs_normalizer: AVAILABLE_NORMALIZERS = pydantic.Field(IdentityNormalizerConfig(), discriminator="name")
     actor_std: float = 0.2
     # if True, the learned features are first centered by subtracting their running mean before being passed to SFs
     center_features: bool = False
