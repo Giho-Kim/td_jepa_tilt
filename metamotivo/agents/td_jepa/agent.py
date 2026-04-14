@@ -437,7 +437,7 @@ class TDJEPAAgent:
         with torch.no_grad():
             phi_enc = self._model._target_phi_mlp_encoder(phi_obs)  # batch x phi_dim
             actor_in = phi_enc if self.cfg.model.actor_use_full_encoder else phi_obs
-            action = self.sample_action_from_latent(actor_in, z, mean=True)
+            action = self.sample_action_from_latent(actor_in, z, mean=False)
 
         target_phi_predictors = self._model._target_phi_predictor(phi_enc, z, action)  # num_parallel x batch x psi_dim
         v = target_phi_predictors.reshape(-1, target_phi_predictors.shape[-1])  # (B, d)

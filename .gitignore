@@ -3,6 +3,8 @@
 *.jpg
 *.png
 .vscode/
-wandb/
+_wandb/
 *.DS_Store
 .venv/
+results/
+_wandb/
