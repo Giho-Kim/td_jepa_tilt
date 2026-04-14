@@ -1,0 +1,9 @@
+exca>=0.2.5
+h5py>=3.11.0
+ogbench>=1.1.2
+pandas>=2.2.3
+safetensors>=0.4.4
+torch>=2.3
+tqdm
+tyro>=0.9.3
+wandb>=0.22.3

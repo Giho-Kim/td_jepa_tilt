@@ -65,6 +65,10 @@ class TDJEPAAgent:
         self.setup_training()
         self.setup_compile()
         self._model.to(self.device)
+        self.z = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+        self.running_mean = torch.zeros(
+            self.z.shape[-1], device=self.z.device, dtype=self.z.dtype
+        )
 
     @property
     def device(self):
@@ -156,8 +160,12 @@ class TDJEPAAgent:
     @torch.no_grad()
     def sample_mixed_z(self, train_goal: torch.Tensor | None = None, *args, **kwargs):
         # samples a batch from the z distribution used to update the networks
-        z = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+        # z = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+        z = self.z
+
+
         if train_goal is not None:
+
             perm = torch.randperm(self.cfg.train.batch_size, device=self.device)
             train_goal = train_goal[perm]
             # NOTE: this assumes that train_goal has already been passed through the psi_rgb_encoder and obs_normalizer
@@ -168,6 +176,7 @@ class TDJEPAAgent:
             goals = self._model.project_z(goals)
             mask = torch.rand((self.cfg.train.batch_size, 1), device=self.device) < self.cfg.train.train_goal_ratio
             z = torch.where(mask, goals, z)
+
         return z
 
     @torch.no_grad()
@@ -188,7 +197,10 @@ class TDJEPAAgent:
         psi_obs = phi_obs if self.cfg.model.symmetric else self._model._psi_rgb_encoder(obs)
         return phi_obs, phi_next_obs, psi_obs, psi_next_obs
 
-    def update(self, replay_buffer, step: int) -> Dict[str, torch.Tensor]:
+    def update(self, replay_buffer, step: int, init_obs) -> Dict[str, torch.Tensor]:
+
+        init_obs = torch.from_numpy(init_obs).to(self.device)
+
         batch = replay_buffer["train"].sample(self.cfg.train.batch_size)
 
         obs, action, next_obs, terminated = (
@@ -220,6 +232,47 @@ class TDJEPAAgent:
             psi_next_obs=psi_next_obs,
             z=z,
         )
+
+        ############## following kim26cdc
+        with torch.no_grad(), eval_mode(self._model._obs_normalizer):
+            init_obs = self._model._obs_normalizer(init_obs)
+            init_obs = self._model._augmentator(init_obs)
+            phi_init_obs = self._model._phi_rgb_encoder(init_obs)
+
+        n = z.shape[0]
+        idx = torch.randint(0, phi_init_obs.shape[0], (n,), device=phi_init_obs.device)
+        phi_init_obs = phi_init_obs[idx]
+
+        grad = self.score_and_grad(
+            phi_obs=phi_init_obs,
+            z=self.z,
+            centering=True
+        )
+        with torch.no_grad():
+            def sphere_proj(x, radius):
+                n = torch.linalg.norm(x, dim=-1, keepdim=True)
+                return radius * x / torch.clamp(n, min=1e-12)
+
+            def tangent_proj(x, v, radius):
+                dot = torch.sum(x * v, dim=-1, keepdim=True)
+                return v - (dot / radius**2) * x
+
+            eta = 0.01
+            sigma = (2 * eta)**(1/2)
+
+            radius = torch.sqrt(torch.tensor(self.z.shape[-1], dtype=self.z.dtype, device=self.z.device))
+
+            g_top = tangent_proj(self.z, grad, radius)
+            noise = tangent_proj(self.z, torch.randn_like(self.z), radius)
+
+            # print(self.z[0][:5])
+            # print(torch.linalg.norm( eta * g_top))
+            #
+            # print(torch.linalg.norm( sigma * noise))
+            # print("--------------")
+            self.z = sphere_proj(self.z + eta * g_top + sigma * noise, radius)
+            # print(self.z[0][:5])
+
 
         if self.cfg.train.log_eigvals:
             with torch.no_grad():
@@ -333,6 +386,9 @@ class TDJEPAAgent:
 
         total_loss = tdjepa_loss + self.cfg.train.phi_ortho_coef * phi_orth_loss + self.cfg.train.psi_ortho_coef * psi_orth_loss
 
+
+
+
         self.phi_predictor_optimizer.zero_grad(set_to_none=True)
         self.psi_predictor_optimizer.zero_grad(set_to_none=True)
         self.phi_encoder_optimizer.zero_grad(set_to_none=True)
@@ -344,6 +400,10 @@ class TDJEPAAgent:
         self.psi_encoder_optimizer.step()
 
         self._model._update_z_stats(psi_enc)
+
+
+
+
 
         with torch.no_grad():
             output_metrics = {
@@ -365,6 +425,54 @@ class TDJEPAAgent:
                 "psi_tdjepa_loss": psi_tdjepa_loss,
             }
         return output_metrics
+
+    def score_and_grad(self, phi_obs, z, centering=False):
+
+        ##############################   following kim26CDC  ########################3
+        ridge_alpha = 1e-3
+        ridge_min = 1e-8
+        z = z.detach().clone().requires_grad_(True)
+
+        with torch.no_grad():
+            phi_enc = self._model._target_phi_mlp_encoder(phi_obs)  # batch x phi_dim
+            actor_in = phi_enc if self.cfg.model.actor_use_full_encoder else phi_obs
+            action = self.sample_action_from_latent(actor_in, z, mean=True)
+
+        target_phi_predictors = self._model._target_phi_predictor(phi_enc, z, action)  # num_parallel x batch x psi_dim
+        v = target_phi_predictors.reshape(-1, target_phi_predictors.shape[-1])  # (B, d)
+
+        with torch.no_grad():
+            batch_mean = v.mean(dim=0)
+            beta = 0.95
+
+        if centering:
+            v_metric = v - self.running_mean.detach()
+        else:
+            v_metric = v
+
+        with torch.no_grad():
+            G = v_metric.T @ v_metric / v_metric.shape[0]
+            trace_G = torch.trace(G)
+            lam = torch.maximum(
+                ridge_alpha * trace_G / G.shape[0],
+                torch.tensor(ridge_min, device=G.device, dtype=G.dtype),
+            )
+            I = torch.eye(v_metric.shape[-1], device=v_metric.device, dtype=v_metric.dtype)
+            Ginv = torch.linalg.pinv(G + lam * I)  # (d, d)
+
+        vg = v_metric @ Ginv  # (B, d)
+        score = torch.sum(vg * v_metric, dim=1)  # (B,)
+        grad_z = torch.autograd.grad(score.sum(), z)[0]
+
+        import numpy as np
+        if np.random.rand()< 0.001:
+            print(f"Score variance : {score.var(dim=0):.4f}")
+
+        with torch.no_grad():
+            self.running_mean.mul_(beta).add_(batch_mean.detach(), alpha=1 - beta)
+        return grad_z
+        ############################################################33
+
 
     def update_tdjepa_sym(
         self,
@@ -405,6 +513,8 @@ class TDJEPAAgent:
         total_loss.backward()
         self.phi_predictor_optimizer.step()
         self.phi_encoder_optimizer.step()
+
+
 
         self._model._update_z_stats(phi_enc)
 

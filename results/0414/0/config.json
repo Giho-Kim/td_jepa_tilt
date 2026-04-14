@@ -1,0 +1,149 @@
+{
+    "name": "TrainConfig",
+    "agent": {
+        "name": "TDJEPAAgent",
+        "model": {
+            "name": "TDJEPAModel",
+            "device": "cuda",
+            "archi": {
+                "name": "TDJEPAModelArchiConfig",
+                "phi_dim": 256,
+                "psi_dim": 50,
+                "norm_z": true,
+                "rgb_encoder": {
+                    "name": "Identity"
+                },
+                "augmentator": {
+                    "name": "Identity"
+                },
+                "phi_predictor": {
+                    "name": "ForwardArchi",
+                    "hidden_dim": 1024,
+                    "model": "simple",
+                    "hidden_layers": 1,
+                    "embedding_layers": 2,
+                    "num_parallel": 2,
+                    "ensemble_mode": "batch"
+                },
+                "psi_predictor": {
+                    "name": "ForwardArchi",
+                    "hidden_dim": 1024,
+                    "model": "simple",
+                    "hidden_layers": 1,
+                    "embedding_layers": 2,
+                    "num_parallel": 2,
+                    "ensemble_mode": "batch"
+                },
+                "phi_mlp_encoder": {
+                    "name": "BackwardArchi",
+                    "hidden_dim": 256,
+                    "hidden_layers": 0,
+                    "norm": true
+                },
+                "psi_mlp_encoder": {
+                    "name": "BackwardArchi",
+                    "hidden_dim": 256,
+                    "hidden_layers": 2,
+                    "norm": true
+                },
+                "actor": {
+                    "name": "simple",
+                    "model": "simple",
+                    "hidden_dim": 1024,
+                    "hidden_layers": 1,
+                    "embedding_layers": 2
+                }
+            },
+            "obs_normalizer": {
+                "name": "IdentityNormalizerConfig"
+            },
+            "actor_std": 0.2,
+            "actor_use_full_encoder": true,
+            "symmetric": false
+        },
+        "train": {
+            "name": "TDJEPAAgentTrainConfig",
+            "lr_predictor": 0.0001,
+            "lr_phi": 0.0001,
+            "lr_psi": 0.0001,
+            "lr_actor": 0.0001,
+            "weight_decay": 0.0,
+            "encoder_target_tau": 0.001,
+            "predictor_target_tau": 0.001,
+            "phi_ortho_coef": 0.1,
+            "psi_ortho_coef": 0.01,
+            "train_goal_ratio": 0.5,
+            "predictor_pessimism_penalty": 0.0,
+            "actor_pessimism_penalty": 0.0,
+            "stddev_clip": 0.3,
+            "batch_size": 1024,
+            "discount": 0.98,
+            "bc_coeff": 0.0,
+            "log_eigvals": false,
+            "scale_train_goals": false
+        },
+        "compile": true
+    },
+    "env": {
+        "name": "dmc",
+        "domain": "walker",
+        "task": "stand",
+        "seed": 0,
+        "obs_type": "state",
+        "camera_id": null,
+        "render_height": 64,
+        "render_width": 64,
+        "frame_stack": 1
+    },
+    "data": {
+        "name": "dmc",
+        "domain": "walker",
+        "dataset_root": "../jepa/exorl",
+        "load_n_episodes": 5000,
+        "obs_type": "state",
+        "buffer_type": "dict",
+        "future": 0.99,
+        "num_workers": 8,
+        "horizon": 1,
+        "dataset_expl_agent": "rnd"
+    },
+    "relabel_dataset": false,
+    "work_dir": "results/0414/0",
+    "seed": 3917,
+    "log_every_updates": 10000,
+    "num_train_steps": 3000000,
+    "checkpoint_every_steps": 100000,
+    "use_wandb": true,
+    "wandb_ename": null,
+    "wandb_gname": "td_jepa_walker_proprio",
+    "wandb_pname": "td_jepa",
+    "buffer_device": null,
+    "evaluations": [
+        {
+            "name": "dmc_reward_eval",
+            "name_in_logs": "reward",
+            "env": {
+                "name": "dmc",
+                "domain": "walker",
+                "task": "stand",
+                "seed": 0,
+                "obs_type": "state",
+                "camera_id": null,
+                "render_height": 64,
+                "render_width": 64,
+                "frame_stack": 1
+            },
+            "tasks": [
+                "stand",
+                "walk",
+                "run",
+                "spin"
+            ],
+            "num_episodes": 10,
+            "num_inference_samples": 10000,
+            "disable_tqdm": true
+        }
+    ],
+    "eval_every_steps": 100000,
+    "tags": {}
+}

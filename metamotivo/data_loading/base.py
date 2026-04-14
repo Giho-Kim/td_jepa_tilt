@@ -136,6 +136,22 @@ class BaseDataConfig(BaseConfig):
             print("Enforcing parallel buffer when learning from pixels.")
             buffer_type = "parallel"
 
+        match self.obs_type:
+            case "state":
+                obs_key = "observation"
+            case "pixels":
+                obs_key = "pixels"
+            case _:
+                raise ValueError(f"Unknown observation type {obs_type}")
+
+
+        init_obs = []
+        for _idx in range(num_episodes):
+            data = np.load(files[_idx])
+            init_obs.append(data[obs_key][0].astype(np.float32))
+        init_obs = np.array(init_obs)
+
+
         match buffer_type:
             case "dict":
                 data = load_transitions(
@@ -169,4 +185,4 @@ class BaseDataConfig(BaseConfig):
                 }
             case _:
                 raise ValueError(f"Unsupported buffer type {self.buffer_type}")
-        return replay_buffer
+        return replay_buffer, init_obs

@@ -59,6 +59,7 @@ class TrainConfig(BaseConfig):
 
     env: Env = pydantic.Field(discriminator="name")
     data: DataLoading = pydantic.Field(discriminator="name")
+
     relabel_dataset: bool = False
 
     work_dir: str = pydantic.Field(default_factory=lambda: get_local_workdir("train_dmc"))
@@ -66,8 +67,8 @@ class TrainConfig(BaseConfig):
     seed: int = 0
     log_every_updates: int = 10_000
     num_train_steps: int = 3_000_000
-    checkpoint_every_steps: int = 250_000
-
+    checkpoint_every_steps: int = 100_000
+    #250_000
     # WANDB
     use_wandb: bool = False
     wandb_ename: str | None = None
@@ -81,7 +82,7 @@ class TrainConfig(BaseConfig):
     # If you want to add more available evaluations, Update "Evaluations" type above
     evaluations: Dict[str, Evaluation] | List[Evaluation] = pydantic.Field(default_factory=lambda: [])
 
-    eval_every_steps: int = 250_000
+    eval_every_steps: int = 100_000
 
     tags: dict = pydantic.Field(default_factory=lambda: {})
 
@@ -110,11 +111,14 @@ def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_buil
     return agent, cfg, checkpoint_time
 
 
-def init_wandb(cfg: TrainConfig):
-    exp_name = "dmc-offline"
+def init_wandb(cfg: TrainConfig
+               ):
+
+    exp_name = "dmc-offline-action_mean"
     wandb_name = exp_name
     wandb_config = cfg.model_dump()
-    wandb.init(entity=cfg.wandb_ename, project=cfg.wandb_pname, group=cfg.wandb_gname, name=wandb_name, config=wandb_config, dir="./_wandb")
+    wandb.init(entity=cfg.wandb_ename, project=cfg.wandb_pname, group=cfg.wandb_gname, name=wandb_name, config=wandb_config, \
+               dir="./_wandb", reinit=True)
 
 
 class Workspace:
@@ -122,6 +126,7 @@ class Workspace:
         self.cfg = cfg
 
         sample_env, _ = cfg.env.build()
+
         self.obs_space = sample_env.observation_space
         assert isinstance(self.obs_space, gymnasium.spaces.Box), "Only Box observation spaces are supported"
 
@@ -164,8 +169,8 @@ class Workspace:
     def train_offline(self) -> None:
         buffer_device = self.agent.device if self.cfg.buffer_device is None else self.cfg.buffer_device
         relabel_fn = self.cfg.env.get_relabel_fn(self.cfg.env.task) if self.cfg.relabel_dataset else None
-        replay_buffer = self.cfg.data.build(buffer_device, self.cfg.agent.train.batch_size, self.cfg.env.frame_stack, relabel_fn)
-        print(replay_buffer["train"])
+        replay_buffer, init_obs = self.cfg.data.build(buffer_device, self.cfg.agent.train.batch_size, self.cfg.env.frame_stack, relabel_fn)
+
 
         total_metrics = None
         fps_start_time = time.time()
@@ -182,7 +187,7 @@ class Workspace:
                 eval_time_checker.update_last_step(t)
                 self.eval(t, replay_buffer=replay_buffer)
 
-            metrics = self.agent.update(replay_buffer, t)
+            metrics = self.agent.update(replay_buffer, t, init_obs)
 
             # we need to copy tensors returned by a cudagraph module
             if total_metrics is None:
@@ -191,6 +196,7 @@ class Workspace:
                 total_metrics = {k: total_metrics[k] + metrics[k] for k in metrics.keys()}
 
             if log_time_checker.check(t):
+                # print(self.agent.z.mean().item(), self.agent.z.var().item())
                 log_time_checker.update_last_step(t)
                 m_dict = {}
                 for k in sorted(list(total_metrics.keys())):
@@ -251,4 +257,9 @@ if __name__ == "__main__":
     # This is the bare minimum CLI interface to launch experiments, but ideally you should
     # launch your experiments from Python code (e.g., see under "scripts")
     workspace = tyro.cli(Workspace)
-    workspace.train()
+    # workspace.train()
+    try:
+        workspace.train()
+    finally:
+        if workspace.cfg.use_wandb:
+            wandb.finish()
