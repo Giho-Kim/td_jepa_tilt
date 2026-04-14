@@ -114,7 +114,7 @@ def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_buil
 def init_wandb(cfg: TrainConfig
                ):
 
-    exp_name = "dmc-offline-action_mean"
+    exp_name = "dmc-offline-try"
     wandb_name = exp_name
     wandb_config = cfg.model_dump()
     wandb.init(entity=cfg.wandb_ename, project=cfg.wandb_pname, group=cfg.wandb_gname, name=wandb_name, config=wandb_config, \

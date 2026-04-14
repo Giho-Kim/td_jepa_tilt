@@ -161,8 +161,8 @@ def main(args: LaunchArgs):
                                 "task": ALL_TASKS[trial["env.domain"]][0],
                             },
                             "tasks": ALL_TASKS[trial["env.domain"]],
-                            "num_episodes": 10,
-                            "num_inference_samples": 10_000,
+                            "num_episodes": 1,
+                            "num_inference_samples": 1,#0_000,
                         },
                     ],
                 }

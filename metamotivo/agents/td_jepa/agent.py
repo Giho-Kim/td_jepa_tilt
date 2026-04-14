@@ -69,6 +69,7 @@ class TDJEPAAgent:
         self.running_mean = torch.zeros(
             self.z.shape[-1], device=self.z.device, dtype=self.z.dtype
         )
+        self.gram = torch.eye(self.z.shape[-1], device=self.z.device)
 
     @property
     def device(self):
@@ -245,8 +246,8 @@ class TDJEPAAgent:
 
         grad = self.score_and_grad(
             phi_obs=phi_init_obs,
-            z=self.z,
-            centering=True
+            z = self.z,
+            centering=False
         )
         with torch.no_grad():
             def sphere_proj(x, radius):
@@ -445,20 +446,24 @@ class TDJEPAAgent:
             batch_mean = v.mean(dim=0)
             beta = 0.95
 
+
         if centering:
             v_metric = v - self.running_mean.detach()
         else:
             v_metric = v
 
         with torch.no_grad():
-            G = v_metric.T @ v_metric / v_metric.shape[0]
-            trace_G = torch.trace(G)
+            G_batch = v_metric.T @ v_metric / v_metric.shape[0]
+            self.gram.mul_(beta).add_((1-beta) * G_batch)
+
+
+            trace_G = torch.trace(self.gram)
             lam = torch.maximum(
-                ridge_alpha * trace_G / G.shape[0],
-                torch.tensor(ridge_min, device=G.device, dtype=G.dtype),
+                ridge_alpha * trace_G / self.gram.shape[0],
+                torch.tensor(ridge_min, device=self.gram.device, dtype=self.gram.dtype),
             )
             I = torch.eye(v_metric.shape[-1], device=v_metric.device, dtype=v_metric.dtype)
-            Ginv = torch.linalg.pinv(G + lam * I)  # (d, d)
+            Ginv = torch.linalg.pinv(self.gram + lam * I)  # (d, d)
 
         vg = v_metric @ Ginv  # (B, d)
         score = torch.sum(vg * v_metric, dim=1)  # (B,)
@@ -470,6 +475,7 @@ class TDJEPAAgent:
 
         with torch.no_grad():
             self.running_mean.mul_(beta).add_(batch_mean.detach(), alpha=1 - beta)
+
         return grad_z
         ############################################################33
 
