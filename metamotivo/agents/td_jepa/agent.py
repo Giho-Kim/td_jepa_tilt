@@ -161,7 +161,7 @@ class TDJEPAAgent:
     @torch.no_grad()
     def sample_mixed_z(self, train_goal: torch.Tensor | None = None, *args, **kwargs):
         # samples a batch from the z distribution used to update the networks
-        z_rand = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+        # z_rand = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
 
         z = self.z
 
@@ -180,8 +180,8 @@ class TDJEPAAgent:
             z = torch.where(mask, goals, z)
 
 
-            mask_reset = torch.rand((self.cfg.train.batch_size, 1), device=self.device) < 0.1
-            self.z = torch.where(mask_reset, z_rand, self.z)
+            # mask_reset = torch.rand((self.cfg.train.batch_size, 1), device=self.device) < 0.1
+            # self.z = torch.where(mask_reset, z_rand, self.z)
 
         return z
 
@@ -227,7 +227,45 @@ class TDJEPAAgent:
         obs, next_obs = self.augment_image(obs, next_obs)
         phi_obs, phi_next_obs, psi_obs, psi_next_obs = self.encode_image(obs, next_obs)
 
-        z = self.sample_mixed_z(train_goal=psi_next_obs).clone()
+        # z = self.sample_mixed_z(train_goal=psi_next_obs).clone()
+        with torch.no_grad(), eval_mode(self._model._obs_normalizer):
+            init_obs = self._model._obs_normalizer(init_obs)
+            init_obs = self._model._augmentator(init_obs)
+            phi_init_obs = self._model._phi_rgb_encoder(init_obs)
+
+            n = self.z.shape[0]
+            idx = torch.randint(0, phi_init_obs.shape[0], (n,), device=phi_init_obs.device)
+            phi_init_obs = phi_init_obs[idx]
+
+            cur_score = self.score_and_grad(
+                phi_obs=phi_init_obs,
+                z = self.z,
+                centering=False
+            )
+
+            ##############################################################################
+            # 교체할 개수
+            n_replace = max(1, int(0.1 * n))
+            # score 낮은 현재 z 선택
+            replace_idx = torch.topk(cur_score, k=n_replace, largest=False).indices
+
+            # random candidate z 생성
+            z_cand = self._model.sample_z(n, device=self.device)
+            cand_score = self.score_and_grad(
+                phi_obs=phi_init_obs,
+                z=z_cand,
+                centering=False,
+            )  # (n,)
+
+            # score 높은 candidate 선택
+            best_idx = torch.topk(cand_score, k=n_replace, largest=True).indices
+
+            self.z[replace_idx] = z_cand[best_idx]
+
+        z = self.sample_mixed_z(
+            train_goal=psi_next_obs,
+            init_phi_obs=phi_init_obs,
+        ).clone()
 
         metrics = self.update_tdjepa(
             phi_obs=phi_obs,
@@ -240,50 +278,50 @@ class TDJEPAAgent:
         )
 
         ############## following kim26cdc
-        with torch.no_grad(), eval_mode(self._model._obs_normalizer):
-            init_obs = self._model._obs_normalizer(init_obs)
-            init_obs = self._model._augmentator(init_obs)
-            phi_init_obs = self._model._phi_rgb_encoder(init_obs)
-
-        n = z.shape[0]
-        idx = torch.randint(0, phi_init_obs.shape[0], (n,), device=phi_init_obs.device)
-        phi_init_obs = phi_init_obs[idx]
-
-        grad = self.score_and_grad(
-            phi_obs=phi_init_obs,
-            z = self.z,
-            centering=False
-        )
-        with torch.no_grad():
-            def sphere_proj(x, radius):
-                n = torch.linalg.norm(x, dim=-1, keepdim=True)
-                return radius * x / torch.clamp(n, min=1e-12)
-
-            def tangent_proj(x, v, radius):
-                dot = torch.sum(x * v, dim=-1, keepdim=True)
-                return v - (dot / radius**2) * x
-
-            eta = 0.01
-            sigma = (2 * eta)**(1/2)
-            # - task wise residual 은 p가 해당 z에 대해서 얼마나 mass를 주느냐에 따라 달림
-            # - any test q 에대해서 그러므로 suboptimality 는 p 가 얼마나 task들을 cover하느냐에 따라 달림
-            # - 그 최고는 coverage-aware한 D-optimal p 임
-
-
-
-
-
-            radius = torch.sqrt(torch.tensor(self.z.shape[-1], dtype=self.z.dtype, device=self.z.device))
-
-            g_top = tangent_proj(self.z, grad, radius)
-            noise = tangent_proj(self.z, torch.randn_like(self.z), radius)
-
-            # print(self.z[0][:5])
-            # print(torch.linalg.norm( eta * g_top))
-            #
-            # print(torch.linalg.norm( sigma * noise))
-            # print("--------------")
-            self.z = sphere_proj(self.z + eta * g_top + sigma * noise, radius)
+        # with torch.no_grad(), eval_mode(self._model._obs_normalizer):
+        #     init_obs = self._model._obs_normalizer(init_obs)
+        #     init_obs = self._model._augmentator(init_obs)
+        #     phi_init_obs = self._model._phi_rgb_encoder(init_obs)
+        #
+        # n = z.shape[0]
+        # idx = torch.randint(0, phi_init_obs.shape[0], (n,), device=phi_init_obs.device)
+        # phi_init_obs = phi_init_obs[idx]
+        #
+        # grad = self.score_and_grad(
+        #     phi_obs=phi_init_obs,
+        #     z = self.z,
+        #     centering=False
+        # )
+        # with torch.no_grad():
+        #     def sphere_proj(x, radius):
+        #         n = torch.linalg.norm(x, dim=-1, keepdim=True)
+        #         return radius * x / torch.clamp(n, min=1e-12)
+        #
+        #     def tangent_proj(x, v, radius):
+        #         dot = torch.sum(x * v, dim=-1, keepdim=True)
+        #         return v - (dot / radius**2) * x
+        #
+        #     eta = 0.01
+        #     sigma = (2 * eta)**(1/2)
+        #     # - task wise residual 은 p가 해당 z에 대해서 얼마나 mass를 주느냐에 따라 달림
+        #     # - any test q 에대해서 그러므로 suboptimality 는 p 가 얼마나 task들을 cover하느냐에 따라 달림
+        #     # - 그 최고는 coverage-aware한 D-optimal p 임
+        #
+        #
+        #
+        #
+        #
+        #     radius = torch.sqrt(torch.tensor(self.z.shape[-1], dtype=self.z.dtype, device=self.z.device))
+        #
+        #     g_top = tangent_proj(self.z, grad, radius)
+        #     noise = tangent_proj(self.z, torch.randn_like(self.z), radius)
+        #
+        #     # print(self.z[0][:5])
+        #     # print(torch.linalg.norm( eta * g_top))
+        #     #
+        #     # print(torch.linalg.norm( sigma * noise))
+        #     # print("--------------")
+        #     self.z = sphere_proj(self.z + eta * g_top + sigma * noise, radius)
             # print(self.z[0][:5])
 
 
@@ -479,16 +517,21 @@ class TDJEPAAgent:
 
         vg = v_metric @ Ginv  # (B, d)
         score = torch.sum(vg * v_metric, dim=1)  # (B,)
-        grad_z = torch.autograd.grad(score.sum(), z)[0]
 
-        import numpy as np
-        if np.random.rand()< 0.001:
-            print(f"Score variance : {score.var(dim=0):.4f}")
+        num_parallel = target_phi_predictors.shape[0]
+        score = score.view(num_parallel, z.shape[0]).mean(dim=0)  # (batch,)
 
-        with torch.no_grad():
-            self.running_mean.mul_(beta).add_(batch_mean.detach(), alpha=1 - beta)
 
-        return grad_z
+        # grad_z = torch.autograd.grad(score.sum(), z)[0]
+        #
+        # import numpy as np
+        # if np.random.rand()< 0.001:
+        #     print(f"Score variance : {score.var(dim=0):.4f}")
+        #
+        # with torch.no_grad():
+        #     self.running_mean.mul_(beta).add_(batch_mean.detach(), alpha=1 - beta)
+
+        return score
         ############################################################33
 
 
