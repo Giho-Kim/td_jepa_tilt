@@ -67,7 +67,7 @@ class TrainConfig(BaseConfig):
     seed: int = 0
     log_every_updates: int = 10_000
     num_train_steps: int = 3_000_000
-    checkpoint_every_steps: int = 100_000
+    checkpoint_every_steps: int = 50_000
     #250_000
     # WANDB
     use_wandb: bool = False
@@ -82,7 +82,7 @@ class TrainConfig(BaseConfig):
     # If you want to add more available evaluations, Update "Evaluations" type above
     evaluations: Dict[str, Evaluation] | List[Evaluation] = pydantic.Field(default_factory=lambda: [])
 
-    eval_every_steps: int = 100_000
+    eval_every_steps: int = 50_000
 
     tags: dict = pydantic.Field(default_factory=lambda: {})
 
@@ -114,7 +114,7 @@ def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_buil
 def init_wandb(cfg: TrainConfig
                ):
 
-    exp_name = "dmc-offline-ema"
+    exp_name = "dmc-offline-collect"
     wandb_name = exp_name
     wandb_config = cfg.model_dump()
     wandb.init(entity=cfg.wandb_ename, project=cfg.wandb_pname, group=cfg.wandb_gname, name=wandb_name, config=wandb_config, \
@@ -187,6 +187,14 @@ class Workspace:
                 eval_time_checker.update_last_step(t)
                 self.eval(t, replay_buffer=replay_buffer)
 
+            if t % 100 == 0:
+                self.collect_online_data(
+                    replay_buffer=replay_buffer,
+                    num_episodes=100,
+                    horizon=1000,
+                    random_actions=False,
+                )
+
             metrics = self.agent.update(replay_buffer, t, init_obs)
 
             # we need to copy tensors returned by a cudagraph module
@@ -251,8 +259,143 @@ class Workspace:
         self.agent.save(str(self.work_dir / CHECKPOINT_DIR_NAME))
         with (self.work_dir / CHECKPOINT_DIR_NAME / "train_status.json").open("w+") as f:
             json.dump({"time": time}, f, indent=4)
+    #######################################################################################################
+    import numpy as np
+    import torch
+
+    def collect_online_data(
+            self,
+            replay_buffer,
+            num_episodes: int,
+            horizon: int,
+            random_actions: bool = False,
+    ):
+        if not hasattr(self, "_online_env") or self._online_env is None:
+            self._online_env = self._build_online_env()
+
+        return self._collect_episodes(
+            env=self._online_env,
+            replay_buffer=replay_buffer,
+            num_episodes=num_episodes,
+            horizon=horizon,
+            random_actions=random_actions,
+        )
 
 
+    def _build_online_env(self):
+        env, _ = self.cfg.env.build()
+        return env
+
+    def _collect_episodes(
+            self,
+            env,
+            replay_buffer,
+            num_episodes: int,
+            horizon: int,
+            random_actions: bool = False,
+    ):
+        """
+        Collect transitions episode-wise and append them to replay_buffer["train"].
+
+        Args:
+            num_episodes: number of episodes to collect
+            horizon: max steps per episode
+            random_actions: whether to sample random actions
+        Returns:
+            total number of collected transitions
+        """
+        assert num_episodes > 0
+        assert horizon > 0
+
+        obs_list = []
+        action_list = []
+        physics_list = []
+        discount_list = []
+
+        next_obs_list = []
+        next_physics_list = []
+        next_discount_list = []
+        terminated_list = []
+
+        total_steps = 0
+
+        self.agent._model.train(False)
+        with torch.no_grad():
+            for _ in range(num_episodes):
+                obs, info = env.reset()
+                idx = torch.randint(0, self.agent.z.shape[0], (1,), device=self.agent.z.device)
+                z_t = self.agent.z[idx]
+
+                for _ in range(horizon):
+                    if random_actions:
+                        action = env.action_space.sample()
+                    else:
+                        obs_t = torch.as_tensor(
+                            obs, device=self.agent.device, dtype=torch.float32
+                        ).unsqueeze(0)
+
+
+                        action = (
+                            self.agent.act(obs_t, z_t, mean=False)
+                            .squeeze(0)
+                            .cpu()
+                            .numpy()
+                        )
+
+                    next_obs, reward, terminated, truncated, next_info = env.step(action)
+                    done = terminated or truncated
+
+                    obs_list.append(np.asarray(obs, dtype=np.float32))
+                    action_list.append(np.asarray(action, dtype=np.float32))
+                    physics_list.append(np.asarray(info["physics"], dtype=np.float32))
+                    discount_list.append(
+                        np.array(
+                            1.0 if info.get("discount", None) is None else info["discount"],
+                            dtype=np.float32,
+                        )
+                    )
+
+                    next_obs_list.append(np.asarray(next_obs, dtype=np.float32))
+                    next_physics_list.append(
+                        np.asarray(next_info["physics"], dtype=np.float32)
+                    )
+                    next_discount_list.append(
+                        np.array(
+                            1.0
+                            if next_info.get("discount", None) is None
+                            else next_info["discount"],
+                            dtype=np.float32,
+                        )
+                    )
+                    terminated_list.append(np.array(done, dtype=bool))
+
+                    total_steps += 1
+
+                    obs, info = next_obs, next_info
+
+                    if done:
+                        break
+
+        self.agent._model.train()
+
+        if total_steps == 0:
+            return 0
+
+        batch = {
+            "observation": np.stack(obs_list, axis=0),
+            "action": np.stack(action_list, axis=0),
+            "physics": np.stack(physics_list, axis=0),
+            # "discount": np.stack(discount_list, axis=0).reshape(-1, 1),
+            "next": {
+                "observation": np.stack(next_obs_list, axis=0),
+                "physics": np.stack(next_physics_list, axis=0),
+                # "discount": np.stack(next_discount_list, axis=0).reshape(-1, 1),
+                "terminated": np.stack(terminated_list, axis=0).reshape(-1, 1),
+            },
+        }
+
+        replay_buffer["train"].extend(batch)
+        return total_steps
 if __name__ == "__main__":
     # This is the bare minimum CLI interface to launch experiments, but ideally you should
     # launch your experiments from Python code (e.g., see under "scripts")

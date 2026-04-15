@@ -161,7 +161,8 @@ class TDJEPAAgent:
     @torch.no_grad()
     def sample_mixed_z(self, train_goal: torch.Tensor | None = None, *args, **kwargs):
         # samples a batch from the z distribution used to update the networks
-        # z = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+        z_rand = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+
         z = self.z
 
 
@@ -177,6 +178,10 @@ class TDJEPAAgent:
             goals = self._model.project_z(goals)
             mask = torch.rand((self.cfg.train.batch_size, 1), device=self.device) < self.cfg.train.train_goal_ratio
             z = torch.where(mask, goals, z)
+
+
+            mask_reset = torch.rand((self.cfg.train.batch_size, 1), device=self.device) < 0.1
+            self.z = torch.where(mask_reset, z_rand, self.z)
 
         return z
 
@@ -260,6 +265,13 @@ class TDJEPAAgent:
 
             eta = 0.01
             sigma = (2 * eta)**(1/2)
+            # - task wise residual 은 p가 해당 z에 대해서 얼마나 mass를 주느냐에 따라 달림
+            # - any test q 에대해서 그러므로 suboptimality 는 p 가 얼마나 task들을 cover하느냐에 따라 달림
+            # - 그 최고는 coverage-aware한 D-optimal p 임
+
+
+
+
 
             radius = torch.sqrt(torch.tensor(self.z.shape[-1], dtype=self.z.dtype, device=self.z.device))
 
