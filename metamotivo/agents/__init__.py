@@ -19,6 +19,8 @@ from metamotivo.agents.td3.agent import TD3AgentConfig
 from metamotivo.agents.td3.flow_bc.agent import TD3FlowBCAgentConfig
 from metamotivo.agents.td_jepa.agent import TDJEPAAgentConfig
 from metamotivo.agents.td_jepa.flow_bc.agent import TDJEPAFlowBCAgentConfig
+from metamotivo.agents.td_jepa_tilt.agent import TiltTDJEPAAgentConfig
+from metamotivo.agents.fb_tilt.agent import TiltFBAgentConfig
 
 Agent = (
     TDJEPAAgentConfig
@@ -37,4 +39,6 @@ Agent = (
     | ICVFFlowBCAgentConfig
     | TD3AgentConfig
     | TD3FlowBCAgentConfig
+    | TiltTDJEPAAgentConfig
+    | TiltFBAgentConfig
 )

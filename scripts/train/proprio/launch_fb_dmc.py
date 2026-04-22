@@ -13,7 +13,7 @@ from metamotivo.envs.dmc_tasks import ALL_TASKS
 from metamotivo.misc.launcher_utils import all_combinations_of_nested_dicts_for_sweep, flatten, launch_trials
 
 BASE_CFG = {
-    "num_train_steps": 3_000_000,
+    "num_train_steps": 2_000_000,
     "data": {
         "name": "dmc",
         "domain": "walker",
@@ -163,7 +163,26 @@ def main(args: LaunchArgs):
             raise RuntimeError("Unknown sweep configuration")
 
     trials = []
-    for i, trial in enumerate(all_combinations_of_nested_dicts_for_sweep(sweep_params)):
+
+    from datetime import datetime
+    from pathlib import Path
+    import numpy as np
+    all_combinations = all_combinations_of_nested_dicts_for_sweep(sweep_params)
+    selected_combinations = []
+    selected_seeds = []
+    MAX_EXP = 3
+    while len(selected_combinations) < MAX_EXP:
+        idx = np.random.randint(len(all_combinations))
+        selected_combination = all_combinations[idx]
+        seed = selected_combination["seed"]
+        if seed not in selected_seeds:
+            selected_seeds.append(seed)
+            selected_combinations.append(all_combinations[idx])
+
+    for i, trial in enumerate(selected_combinations):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_root = Path(args.workdir_root) / f"{args.sweep_config}_{timestamp}"
+        workdir = str(run_root / str(i))
         trial = flatten(trial)
         trial.update(
             flatten(
@@ -172,7 +191,7 @@ def main(args: LaunchArgs):
                     "wandb_ename": args.wandb_ename,
                     "wandb_pname": args.wandb_pname,
                     "wandb_gname": args.wandb_gname,
-                    "work_dir": f"{args.workdir_root}/{i}",
+                    "work_dir": workdir,
                     "data.domain": trial["env.domain"],
                     "env.task": ALL_TASKS[trial["env.domain"]][0],
                     "evaluations": [
@@ -199,7 +218,7 @@ def main(args: LaunchArgs):
 if __name__ == "__main__":
     args = tyro.cli(LaunchArgs)
     main(args)
-    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_walker_proprio --data_path datasets --workdir_root results --sweep_config sweep_walker
-    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_cheetah_proprio --data_path datasets --workdir_root results --sweep_config sweep_cheetah
-    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_quadruped_proprio --data_path datasets --workdir_root results --sweep_config sweep_quadruped
-    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_pointmass_proprio --data_path datasets --workdir_root results --sweep_config sweep_pointmass
+    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_walker_proprio --data_path ../DATASET/exorl_updated  --workdir_root results/fbwalker0 --sweep_config sweep_walker
+    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_cheetah_proprio --data_path ../DATASET/exorl_updated  --workdir_root results --sweep_config sweep_cheetah
+    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_quadruped_proprio --data_path ../DATASET/exorl_updated  --workdir_root results --sweep_config sweep_quadruped
+    # uv run -m scripts.train.proprio.launch_fb_dmc --use_wandb --wandb_gname fb_pointmass_proprio --data_path ../DATASET/exorl_updated  --workdir_root results --sweep_config sweep_pointmass

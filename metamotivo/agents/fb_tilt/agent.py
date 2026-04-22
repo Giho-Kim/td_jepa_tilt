@@ -41,8 +41,8 @@ class FBAgentTrainConfig(BaseConfig):
     bc_coeff: float = 0.0
 
 
-class FBAgentConfig(BaseConfig):
-    name: Literal["FBAgent"] = "FBAgent"
+class TiltFBAgentConfig(BaseConfig):
+    name: Literal["TiltFBAgent"] = "TiltFBAgent"
     model: FBModelConfig
     train: FBAgentTrainConfig
     cudagraphs: bool = False
@@ -53,13 +53,13 @@ class FBAgentConfig(BaseConfig):
 
     @property
     def object_class(self):
-        return FBAgent
+        return TiltFBAgent
 
 
-class FBAgent:
-    config_class = FBAgentConfig
+class TiltFBAgent:
+    config_class = TiltFBAgentConfig
 
-    def __init__(self, obs_space, action_dim, cfg: FBAgentConfig):
+    def __init__(self, obs_space, action_dim, cfg: TiltFBAgentConfig):
         self.obs_space = obs_space
         self.action_dim = action_dim
         self.cfg = cfg
@@ -67,7 +67,8 @@ class FBAgent:
         self.setup_training()
         self.setup_compile()
         self._model.to(self.device)
-
+        self.z = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+        self.gram = torch.eye(self.z.shape[-1], device=self.device)
     @property
     def device(self):
         return self._model.device
@@ -141,11 +142,41 @@ class FBAgent:
     def act(self, obs: torch.Tensor, z: torch.Tensor, mean: bool = True) -> torch.Tensor:
         return self._model.act(obs, z, mean)
 
+
+    # @torch.no_grad()
+    # def sample_mixed_z(self, train_goal: torch.Tensor | None = None, *args, **kwargs):
+    #     # samples a batch from the z distribution used to update the networks
+    #     # z_rand = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+    #
+    #     z = self.z
+    #
+    #
+    #     if train_goal is not None:
+    #
+    #         perm = torch.randperm(self.cfg.train.batch_size, device=self.device)
+    #         train_goal = train_goal[perm]
+    #         # NOTE: this assumes that train_goal has already been passed through the psi_rgb_encoder and obs_normalizer
+    #         goals = self._model._phi_mlp_encoder(train_goal) if self.cfg.model.symmetric else self._model._psi_mlp_encoder(train_goal)
+    #         if self.cfg.train.scale_train_goals:
+    #             inv_cov = torch.inverse(self._model._z_cov + 1e-6 * torch.eye(*self._model._z_cov.size(), device=z.device))
+    #             goals = torch.matmul(goals, inv_cov)
+    #         goals = self._model.project_z(goals)
+    #         mask = torch.rand((self.cfg.train.batch_size, 1), device=self.device) < self.cfg.train.train_goal_ratio
+    #         z = torch.where(mask, goals, z)
+    #
+    #
+    #         # mask_reset = torch.rand((self.cfg.train.batch_size, 1), device=self.device) < 0.1
+    #         # self.z = torch.where(mask_reset, z_rand, self.z)
+    #
+    #     return z
+
+
+
     @torch.no_grad()
     def sample_mixed_z(self, train_goal: torch.Tensor | None = None, *args, **kwargs):
         # samples a batch from the z distribution used to update the networks
         with autocast(device_type=self.device, dtype=self._model.amp_dtype, enabled=self.cfg.model.amp):
-            z = self._model.sample_z(self.cfg.train.batch_size, device=self.device)
+            z = self.z
             if train_goal is not None:
                 perm = torch.randperm(self.cfg.train.batch_size, device=self.device)
                 train_goal = train_goal[perm]
@@ -172,7 +203,52 @@ class FBAgent:
             next_obs = self._model._fw_encoder(next_obs)
         return obs, next_obs, goal
 
-    def update(self, replay_buffer, step: int, init_obs = None) -> Dict[str, torch.Tensor]:
+    def score_and_grad(self, phi_obs, z, centering=False):
+
+        ##############################   following kim26CDC  ########################3
+        ridge_alpha = 1e-3
+        ridge_min = 1e-8
+        z = z.detach().clone().requires_grad_(True)
+
+
+        with torch.no_grad():
+            phi_enc =  self._model._left_encoder(phi_obs)  # batch x phi_dim
+            actor_in =  phi_enc  if self.cfg.model.actor_encode_obs else phi_obs
+            action = self.sample_action_from_norm_obs(actor_in, z, mean=False)
+
+
+
+        target_phi_predictors = self._model._target_forward_map(phi_enc, z, action)  # num_parallel x batch x psi_dim
+        v = target_phi_predictors.reshape(-1, target_phi_predictors.shape[-1])  # (B, d)
+
+        if centering:
+            v_metric = v
+        else:
+            v_metric = v
+
+        with torch.no_grad():
+
+            trace_G = torch.trace(self.gram)
+            lam = torch.maximum(
+                ridge_alpha * trace_G / self.gram.shape[0],
+                torch.tensor(ridge_min, device=self.gram.device, dtype=self.gram.dtype),
+            )
+            I = torch.eye(v_metric.shape[-1], device=v_metric.device, dtype=v_metric.dtype)
+            Ginv = torch.linalg.pinv(self.gram + lam * I)  # (d, d)
+
+        vg = v_metric @ Ginv  # (B, d)
+        score = torch.sum(vg * v_metric, dim=1)  # (B,)
+
+        num_parallel = target_phi_predictors.shape[0]
+        score = score.view(num_parallel, z.shape[0]).mean(dim=0)  # (batch,)
+
+
+        # grad_z = torch.autograd.grad(score.sum(), z)[0]
+
+        return score, v_metric
+        ############################################################33
+    def update(self, replay_buffer, step: int, init_obs) -> Dict[str, torch.Tensor]:
+        init_obs = torch.from_numpy(init_obs).to(self.device)
         batch = replay_buffer["train"].sample(self.cfg.train.batch_size)
 
         obs, action, next_obs, terminated = (
@@ -193,7 +269,48 @@ class FBAgent:
         obs, next_obs = self.aug(obs, next_obs)
         obs, next_obs, goal = self.enc(obs, next_obs)
 
-        z = self.sample_mixed_z(train_goal=goal).clone()
+        ######################################################################################3
+        with torch.no_grad(), eval_mode(self._model._obs_normalizer):
+            init_obs = self._model._obs_normalizer(init_obs)
+            init_obs = self._model._augmentator(init_obs)
+
+            phi_init_obs = self._model._fw_encoder(init_obs)
+            # print(phi_init_obs)
+            n = self.z.shape[0]
+            # 후보를 크게 생성
+            cand_mult = 10
+            n_cand = cand_mult * n
+            z_cand = self._model.sample_z(n_cand, device=self.device)
+
+            # 각 후보에 대응할 obs feature 샘플링
+            obs_idx = torch.randint(0, phi_init_obs.shape[0], (n_cand,), device=phi_init_obs.device)
+            phi_obs_cand = phi_init_obs[obs_idx]
+
+            # 후보 score 계산
+            cand_score, sf = self.score_and_grad(
+                phi_obs=phi_obs_cand,
+                z=z_cand,
+                centering=False,
+            )  # (n_cand,)
+
+            # softmax 확률로 n개 뽑아서 전체 교체
+
+            beta = 0.99
+            temperature = 20.  # * beta**(step//10000)
+            logits = cand_score / temperature
+            logits = logits - logits.max()
+            prob = torch.softmax(logits, dim=0)
+            # print(prob.max(), prob.min())
+            selected_idx = torch.multinomial(prob, num_samples=n, replacement=False)
+
+            G_batch = sf[selected_idx].T @ sf[selected_idx] / n
+            self.gram.mul_(beta).add_((1 - beta) * G_batch)
+
+            self.z = z_cand[selected_idx]
+
+        z = self.sample_mixed_z(
+            train_goal=next_obs,
+        ).clone()
 
         q_loss_coef = self.cfg.train.q_loss_coef if self.cfg.train.q_loss_coef > 0 else None
         clip_grad_norm = self.cfg.train.clip_grad_norm if self.cfg.train.clip_grad_norm > 0 else None
@@ -225,11 +342,14 @@ class FBAgent:
 
         return metrics
 
-    def sample_action_from_norm_obs(self, obs: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def sample_action_from_norm_obs(self, obs: torch.Tensor, z: torch.Tensor, mean: bool = False) -> torch.Tensor:
         with autocast(device_type=self.device, dtype=self._model.amp_dtype, enabled=self.cfg.model.amp):
             dist = self._model._actor(obs, z, self._model.cfg.actor_std)
-            action = dist.sample(clip=self.cfg.train.stddev_clip)
-        return action
+            if mean:
+                return dist.mean
+            else:
+                action = dist.sample(clip=self.cfg.train.stddev_clip)
+                return action
 
     def update_fb(
         self,

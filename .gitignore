@@ -2,9 +2,11 @@
 *.csv
 *.jpg
 *.png
+*.pdf
 .vscode/
 _wandb/
 *.DS_Store
 .venv/
 results/
 _wandb/
+neurips_plot.py

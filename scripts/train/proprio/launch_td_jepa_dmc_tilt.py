@@ -21,7 +21,7 @@ BASE_CFG = {
     },
     "env": {"name": "dmc", "domain": "walker", "task": "walk"},
     "agent": {
-        "name": "TDJEPAAgent",
+        "name": "TiltTDJEPAAgent",
         "compile": True,
         "model": {
             "device": "cuda",
@@ -139,8 +139,8 @@ def main(args: LaunchArgs):
         else:
             raise RuntimeError("Unknown sweep configuration")
 
-
     trials = []
+
 
     from datetime import datetime
     from pathlib import Path
@@ -161,7 +161,6 @@ def main(args: LaunchArgs):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_root = Path(args.workdir_root) / f"{args.sweep_config}_{timestamp}"
         workdir = str(run_root / str(i))
-
         trial = flatten(trial)
         trial.update(
             flatten(
@@ -197,7 +196,7 @@ def main(args: LaunchArgs):
 if __name__ == "__main__":
     args = tyro.cli(LaunchArgs)
     main(args)
-    # uv run -m scripts.train.proprio.launch_td_jepa_dmc --use_wandb --wandb_gname td_jepa_walker_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_walker
-    # uv run -m scripts.train.proprio.launch_td_jepa_dmc --use_wandb --wandb_gname td_jepa_cheetah_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_cheetah
-    # uv run -m scripts.train.proprio.launch_td_jepa_dmc --use_wandb --wandb_gname td_jepa_quadruped_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_quadruped
-    # uv run -m scripts.train.proprio.launch_td_jepa_dmc --use_wandb --wandb_gname td_jepa_pointmass_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_pointmass
+    # uv run -m scripts.train.proprio.launch_td_jepa_dmc_tilt --use_wandb --wandb_gname td_jepa_walker_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_walker
+    # uv run -m scripts.train.proprio.launch_td_jepa_dmc_tilt --use_wandb --wandb_gname td_jepa_cheetah_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_cheetah
+    # uv run -m scripts.train.proprio.launch_td_jepa_dmc_tilt --use_wandb --wandb_gname td_jepa_quadruped_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_quadruped
+    # uv run -m scripts.train.proprio.launch_td_jepa_dmc_tilt --use_wandb --wandb_gname td_jepa_pointmass_proprio --data_path ../DATASET/exorl_updated --workdir_root results --sweep_config sweep_pointmass
