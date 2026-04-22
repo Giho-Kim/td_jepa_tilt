@@ -17,7 +17,7 @@ BASE_CFG = {
     "data": {
         "name": "dmc",
         "domain": "walker",
-        "load_n_episodes": 5,
+        "load_n_episodes": 5_000,
         "obs_type": "state",
     },
     "env": {"name": "dmc", "domain": "walker", "task": "walk"},

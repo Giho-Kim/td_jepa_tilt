@@ -67,7 +67,7 @@ class TrainConfig(BaseConfig):
     seed: int = 0
     log_every_updates: int = 10_000
     num_train_steps: int = 3_000_000
-    checkpoint_every_steps: int = 50_000
+    checkpoint_every_steps: int = 100_000
     #250_000
     # WANDB
     use_wandb: bool = False
@@ -82,7 +82,7 @@ class TrainConfig(BaseConfig):
     # If you want to add more available evaluations, Update "Evaluations" type above
     evaluations: Dict[str, Evaluation] | List[Evaluation] = pydantic.Field(default_factory=lambda: [])
 
-    eval_every_steps: int = 50_000
+    eval_every_steps: int = 100_000
 
     tags: dict = pydantic.Field(default_factory=lambda: {})
 
@@ -179,49 +179,47 @@ class Workspace:
         log_time_checker = EveryNStepsChecker(self._checkpoint_time, self.cfg.log_every_updates)
 
         for t in range(self._checkpoint_time, int(self.cfg.num_train_steps) + 1):
-            if t % 100000 ==0:
-                print(t)
-            # if (t != self._checkpoint_time) and checkpoint_time_checker.check(t):
-            #     checkpoint_time_checker.update_last_step(t)
-            #     self.save(t, replay_buffer)
+            if (t != self._checkpoint_time) and checkpoint_time_checker.check(t):
+                checkpoint_time_checker.update_last_step(t)
+                self.save(t, replay_buffer)
+
+            if self.evaluate and eval_time_checker.check(t):
+                eval_time_checker.update_last_step(t)
+                self.eval(t, replay_buffer=replay_buffer)
             #
-            # if self.evaluate and eval_time_checker.check(t):
-            #     eval_time_checker.update_last_step(t)
-            #     self.eval(t, replay_buffer=replay_buffer)
-            # #
-            # # if t == 1000000:
-            # #     self.collect_online_data(
-            # #         replay_buffer=replay_buffer,
-            # #         num_episodes=self.cfg.agent.train.batch_size,
-            # #         horizon=1000,
-            # #         random_actions=False,
-            # #     )
-            #
-            # metrics = self.agent.update(replay_buffer, t, init_obs)
-            #
-            # # we need to copy tensors returned by a cudagraph module
-            # if total_metrics is None:
-            #     total_metrics = {k: metrics[k].clone() for k in metrics.keys()}
-            # else:
-            #     total_metrics = {k: total_metrics[k] + metrics[k] for k in metrics.keys()}
-            #
-            # if log_time_checker.check(t):
-            #     # print(self.agent.z.mean().item(), self.agent.z.var().item())
-            #     log_time_checker.update_last_step(t)
-            #     m_dict = {}
-            #     for k in sorted(list(total_metrics.keys())):
-            #         tmp = total_metrics[k] / (1 if t == 0 else self.cfg.log_every_updates)
-            #         m_dict[k] = np.round(tmp.mean().item(), 6)
-            #     m_dict["duration"] = time.time() - self.start_time
-            #     m_dict["FPS"] = (1 if t == 0 else self.cfg.log_every_updates) / (time.time() - fps_start_time)
-            #     if self.cfg.use_wandb:
-            #         wandb.log(
-            #             {f"train/{k}": v for k, v in m_dict.items()},
-            #             step=t,
-            #         )
-            #     print(m_dict)
-            #     total_metrics = None
-            #     fps_start_time = time.time()
+            # if t == 1000000:
+            #     self.collect_online_data(
+            #         replay_buffer=replay_buffer,
+            #         num_episodes=self.cfg.agent.train.batch_size,
+            #         horizon=1000,
+            #         random_actions=False,
+            #     )
+
+            metrics = self.agent.update(replay_buffer, t, init_obs)
+
+            # we need to copy tensors returned by a cudagraph module
+            if total_metrics is None:
+                total_metrics = {k: metrics[k].clone() for k in metrics.keys()}
+            else:
+                total_metrics = {k: total_metrics[k] + metrics[k] for k in metrics.keys()}
+
+            if log_time_checker.check(t):
+                # print(self.agent.z.mean().item(), self.agent.z.var().item())
+                log_time_checker.update_last_step(t)
+                m_dict = {}
+                for k in sorted(list(total_metrics.keys())):
+                    tmp = total_metrics[k] / (1 if t == 0 else self.cfg.log_every_updates)
+                    m_dict[k] = np.round(tmp.mean().item(), 6)
+                m_dict["duration"] = time.time() - self.start_time
+                m_dict["FPS"] = (1 if t == 0 else self.cfg.log_every_updates) / (time.time() - fps_start_time)
+                if self.cfg.use_wandb:
+                    wandb.log(
+                        {f"train/{k}": v for k, v in m_dict.items()},
+                        step=t,
+                    )
+                print(m_dict)
+                total_metrics = None
+                fps_start_time = time.time()
         return
 
     def eval(self, t, replay_buffer):
