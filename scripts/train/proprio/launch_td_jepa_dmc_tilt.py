@@ -141,21 +141,13 @@ def main(args: LaunchArgs):
 
     trials = []
 
-
     from datetime import datetime
     from pathlib import Path
     import numpy as np
     all_combinations = all_combinations_of_nested_dicts_for_sweep(sweep_params)
-    selected_combinations = []
-    selected_seeds = []
     MAX_EXP = 3
-    while len(selected_combinations) < MAX_EXP:
-        idx = np.random.randint(len(all_combinations))
-        selected_combination = all_combinations[idx]
-        seed = selected_combination["seed"]
-        if seed not in selected_seeds:
-            selected_seeds.append(seed)
-            selected_combinations.append(all_combinations[idx])
+    indices = np.random.choice(len(all_combinations), size=MAX_EXP)
+    selected_combinations = [all_combinations[idx] for idx in indices]
 
     for i, trial in enumerate(selected_combinations):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

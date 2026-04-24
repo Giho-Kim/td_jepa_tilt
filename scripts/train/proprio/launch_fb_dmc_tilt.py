@@ -217,7 +217,9 @@ def main(args: LaunchArgs):
 if __name__ == "__main__":
     args = tyro.cli(LaunchArgs)
     main(args)
-    # uv run -m scripts.train.proprio.launch_fb_dmc_tilt --use_wandb --wandb_gname fb_walker_proprio --data_path ../DATASET/exorl_updated   --workdir_root results --sweep_config sweep_walker
+    # CUDA_VISIBLE_DEVICES=4 uv run -m scripts.train.proprio.launch_fb_dmc_tilt --use_wandb --wandb_gname fb_walker_proprio --data_path ../exorl_state  --workdir_root results --sweep_config sweep_walker
+    # CUDA_VISIBLE_DEVICES=5 uv run -m scripts.train.proprio.launch_fb_dmc_tilt --use_wandb --wandb_gname fb_cheetah_proprio --data_path ../exorl_state   --workdir_root results --sweep_config sweep_cheetah
+
     # uv run -m scripts.train.proprio.launch_fb_dmc_tilt --use_wandb --wandb_gname fb_cheetah_proprio --data_path ../DATASET/exorl_updated   --workdir_root results --sweep_config sweep_cheetah
     # uv run -m scripts.train.proprio.launch_fb_dmc_tilt --use_wandb --wandb_gname fb_quadruped_proprio --data_path ../DATASET/exorl_updated   --workdir_root results --sweep_config sweep_quadruped
     # uv run -m scripts.train.proprio.launch_fb_dmc_tilt --use_wandb --wandb_gname fb_pointmass_proprio --data_path ../DATASET/exorl_updated   --workdir_root results --sweep_config sweep_pointmass

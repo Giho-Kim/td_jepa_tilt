@@ -6,15 +6,15 @@
 import tyro
 
 from scripts.data_processing.exorl.update_data import main as update_data_main
-
-
+#
+# uv run -m scripts.data_processing.exorl.update_all --input_folder ../DATASET/exorl --output_folder ../DATASET/exorl_state --num_workers 8
 def main(
     input_folder: str,
     output_folder: str,
     num_workers: int = 0,
     save_rgb: bool = False,
 ):
-    for domain in ["walker", "cheetah", "quadruped", "pointmass"]:
+    for domain in ["walker", "cheetah"]:#, "quadruped", "pointmass"]:
         update_data_main(
             num_workers=num_workers,
             env_name=domain,
